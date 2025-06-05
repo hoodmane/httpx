@@ -217,9 +217,9 @@ class JavascriptFetchTransport(BaseTransport):
             timeout_dict = request.extensions["timeout"]
             if timeout_dict is not None:
                 if "connect" in timeout_dict:
-                    conn_timeout = timeout_dict["connect"]
+                    conn_timeout = timeout_dict["connect"] or 0.0
                 if "read" in timeout_dict:
-                    read_timeout = timeout_dict["connect"]
+                    read_timeout = timeout_dict["read"] or 0.0
         abort_controller_js = js.AbortController.new()
         headers = {
             k: v for k, v in request.headers.items() if k not in HEADERS_TO_IGNORE
@@ -416,9 +416,9 @@ class AsyncJavascriptFetchTransport(AsyncBaseTransport):
             timeout_dict = request.extensions["timeout"]
             if timeout_dict is not None:
                 if "connect" in timeout_dict:
-                    conn_timeout = timeout_dict["connect"]
+                    conn_timeout = timeout_dict["connect"] or 0.0
                 if "read" in timeout_dict:
-                    read_timeout = timeout_dict["connect"]
+                    read_timeout = timeout_dict["read"] or 0.0
 
         abort_controller_js = js.AbortController.new()
         headers = {

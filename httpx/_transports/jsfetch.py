@@ -18,6 +18,7 @@ from __future__ import annotations
 import email.parser
 import typing
 from types import TracebackType
+from contextlib import contextmanager
 
 import js
 import pyodide
@@ -55,6 +56,29 @@ See also https://github.com/koenvo/pyodide-http/issues/22
 HEADERS_TO_IGNORE = ("user-agent",)
 
 
+@contextmanager
+def _timeout(
+    timeout: float,
+    abort_controller_js: pyodide.ffi.JsProxy,
+    TimeoutExceptionType: type[RequestError],
+    ErrorExceptionType: type[RequestError],
+):
+    timer_id = None
+    if timeout > 0:
+        timer_id = js.setTimeout(abort_controller_js.abort, int(timeout * 1000))
+    try:
+        yield
+    except pyodide.ffi.JsException as err:
+        if err.name == "AbortError":
+            raise TimeoutExceptionType(message="Request timed out")
+            timer_id = None
+        else:
+            raise ErrorExceptionType(message=err.message)
+    finally:
+        if timer_id is not None:
+            js.clearTimeout(timer_id)
+
+
 def _run_sync_with_timeout(
     promise: typing.Awaitable[pyodide.ffi.JsProxy],
     timeout: float,
@@ -79,26 +103,14 @@ def _run_sync_with_timeout(
     Returns:
         _type_: The result of awaiting the promise.
     """
-    timer_id = None
-    if timeout > 0:
-        timer_id = js.setTimeout(
-            abort_controller_js.abort.bind(abort_controller_js), int(timeout * 1000)
-        )
-    try:
-        from pyodide.ffi import run_sync
+    from pyodide.ffi import run_sync
 
+    with _timeout(
+        timeout, abort_controller_js, TimeoutExceptionType, ErrorExceptionType
+    ):
         # run_sync here uses WebAssembly Javascript Promise Integration to
         # suspend python until the Javascript promise resolves.
         return run_sync(promise)
-    except pyodide.ffi.JsException as err:
-        if err.name == "AbortError":
-            raise TimeoutExceptionType(message="Request timed out")
-            timer_id = None
-        else:
-            raise ErrorExceptionType(message=err.message)
-    finally:
-        if timer_id is not None:
-            js.clearTimeout(timer_id)
 
 
 async def _run_async_with_timeout(
@@ -125,22 +137,10 @@ async def _run_async_with_timeout(
     Returns:
         _type_: The result of awaiting the promise.
     """
-    timer_id = None
-    if timeout > 0:
-        timer_id = js.setTimeout(
-            abort_controller_js.abort.bind(abort_controller_js), int(timeout * 1000)
-        )
-    try:
+    with _timeout(
+        timeout, abort_controller_js, TimeoutExceptionType, ErrorExceptionType
+    ):
         return await promise
-    except pyodide.ffi.JsException as err:
-        if err.name == "AbortError":
-            raise TimeoutExceptionType(message="Request timed out")
-            timer_id = None
-        else:
-            raise ErrorExceptionType(message=err.message)
-    finally:
-        if timer_id is not None:
-            js.clearTimeout(timer_id)
 
 
 class EmscriptenStream(SyncByteStream):

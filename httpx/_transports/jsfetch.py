@@ -175,6 +175,12 @@ class EmscriptenStream(SyncByteStream):
         self._stream_js = None
 
 
+def _compute_timeouts(extensions: dict[str, Any]) -> tuple[float, float]:
+    timeout_dict = extensions.get("timeout", {}) or {}
+    conn_timeout = timeout_dict.get("connect", 0.0) or 0.0
+    read_timeout = timeout_dict.get("read", 0.0) or 0.0
+    return [conn_timeout, read_timeout]
+
 class JavascriptFetchTransport(BaseTransport):
     def __init__(
         self,
@@ -213,9 +219,7 @@ class JavascriptFetchTransport(BaseTransport):
         req_body: bytes | None = b"".join(request.stream)
         if req_body is not None and len(req_body) == 0:
             req_body = None
-        timeout_dict = request.extensions.get("timeout", {}) or {}
-        conn_timeout = timeout_dict.get("connect", 0.0) or 0.0
-        read_timeout = timeout_dict.get("read", 0.0) or 0.0
+        conn_timeout, read_timeout = _compute_timeouts(request.extensions)
         abort_controller_js = js.AbortController.new()
         headers = {
             k: v for k, v in request.headers.items() if k not in HEADERS_TO_IGNORE
@@ -271,15 +275,7 @@ class JavascriptFetchTransport(BaseTransport):
             req_body: bytes | None = b"".join(request.stream)
             if req_body is not None and len(req_body) == 0:
                 req_body = None
-
-            timeout = 0.0
-            if "timeout" in request.extensions:
-                timeout_dict = request.extensions["timeout"]
-                if timeout_dict is not None:
-                    if "connect" in timeout_dict:
-                        timeout = timeout_dict["connect"]
-                    if "read" in timeout_dict:
-                        timeout = timeout_dict["connect"]
+            _, timeout = _compute_timeouts(request.extensions)
 
             # XHMLHttpRequest only supports timeouts and proper
             # binary file reading in web-workers
@@ -390,15 +386,7 @@ class AsyncJavascriptFetchTransport(AsyncBaseTransport):
             req_body = None
         else:
             req_body = body_data
-        conn_timeout = 0.0
-        read_timeout = 0.0
-        if "timeout" in request.extensions:
-            timeout_dict = request.extensions["timeout"]
-            if timeout_dict is not None:
-                if "connect" in timeout_dict:
-                    conn_timeout = timeout_dict["connect"] or 0.0
-                if "read" in timeout_dict:
-                    read_timeout = timeout_dict["read"] or 0.0
+        conn_timeout, read_timeout = _compute_timeouts(request.extensions)
 
         abort_controller_js = js.AbortController.new()
         headers = {

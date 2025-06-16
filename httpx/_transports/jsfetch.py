@@ -17,11 +17,11 @@ from __future__ import annotations
 
 import email.parser
 import typing
-from types import TracebackType
 from contextlib import contextmanager
+from types import TracebackType
 
 import js
-import pyodide
+from pyodide.ffi import JsException, JsProxy, can_run_sync, run_sync, to_js
 
 if typing.TYPE_CHECKING:
     import ssl  # pragma: nocover
@@ -59,7 +59,7 @@ HEADERS_TO_IGNORE = ("user-agent",)
 @contextmanager
 def _timeout(
     timeout: float,
-    abort_controller_js: pyodide.ffi.JsProxy,
+    abort_controller_js: JsProxy,
     TimeoutExceptionType: type[RequestError],
     ErrorExceptionType: type[RequestError],
 ):
@@ -72,7 +72,7 @@ def _timeout(
         timer_id = js.setTimeout(abort, int(timeout * 1000))
     try:
         yield
-    except pyodide.ffi.JsException as err:
+    except JsException as err:
         if err.name == "AbortError":
             raise TimeoutExceptionType(message="Request timed out")
             timer_id = None
@@ -84,12 +84,12 @@ def _timeout(
 
 
 def _run_sync_with_timeout(
-    promise: typing.Awaitable[pyodide.ffi.JsProxy],
+    promise: typing.Awaitable[JsProxy],
     timeout: float,
-    abort_controller_js: pyodide.ffi.JsProxy,
+    abort_controller_js: JsProxy,
     TimeoutExceptionType: type[RequestError],
     ErrorExceptionType: type[RequestError],
-) -> pyodide.ffi.JsProxy:
+) -> JsProxy:
     """await a javascript promise synchronously with a timeout set via the
        AbortController and return the resulting javascript proxy
 
@@ -107,8 +107,6 @@ def _run_sync_with_timeout(
     Returns:
         _type_: The result of awaiting the promise.
     """
-    from pyodide.ffi import run_sync
-
     with _timeout(
         timeout, abort_controller_js, TimeoutExceptionType, ErrorExceptionType
     ):
@@ -118,12 +116,12 @@ def _run_sync_with_timeout(
 
 
 async def _run_async_with_timeout(
-    promise: typing.Awaitable[pyodide.ffi.JsProxy],
+    promise: typing.Awaitable[JsProxy],
     timeout: float,
-    abort_controller_js: pyodide.ffi.JsProxy,
+    abort_controller_js: JsProxy,
     TimeoutExceptionType: type[RequestError],
     ErrorExceptionType: type[RequestError],
-) -> pyodide.ffi.JsProxy:
+) -> JsProxy:
     """await a javascript promise asynchronously with a timeout set via the
        AbortController
 
@@ -150,9 +148,9 @@ async def _run_async_with_timeout(
 class EmscriptenStream(SyncByteStream):
     def __init__(
         self,
-        response_stream_js: pyodide.ffi.JsProxy,
+        response_stream_js: JsProxy,
         timeout: float,
-        abort_controller_js: pyodide.ffi.JsProxy,
+        abort_controller_js: JsProxy,
     ) -> None:
         self._stream_js = response_stream_js
         self.timeout = timeout
@@ -210,7 +208,7 @@ class JavascriptFetchTransport(BaseTransport):
         request: Request,
     ) -> Response:
         assert isinstance(request.stream, SyncByteStream)
-        if not self._can_use_jspi():
+        if not can_run_sync():
             return self._no_jspi_fallback(request)
         req_body: bytes | None = b"".join(request.stream)
         if req_body is not None and len(req_body) == 0:
@@ -224,14 +222,14 @@ class JavascriptFetchTransport(BaseTransport):
         }
         fetch_data = {
             "headers": headers,
-            "body": pyodide.ffi.to_js(req_body),
+            "body": to_js(req_body),
             "method": request.method,
             "signal": abort_controller_js.signal,
         }
 
         fetcher_promise_js = js.fetch(
             request.url,
-            pyodide.ffi.to_js(fetch_data, dict_converter=js.Object.fromEntries),
+            to_js(fetch_data, dict_converter=js.Object.fromEntries),
         )
 
         response_js = _run_sync_with_timeout(
@@ -261,22 +259,6 @@ class JavascriptFetchTransport(BaseTransport):
             headers=headers,
             stream=EmscriptenStream(body_stream_js, read_timeout, abort_controller_js),
         )
-
-    def _can_use_jspi(self) -> bool:
-        """Returns true if the pyodide environment allows for use
-        of synchronous javascript promise calls. If not we have to
-        fall back to the browser XMLHttpRequest api.
-        """
-        # Ignore this next if statement from coverage because only one part
-        # will be run depending on the pyodide version
-        if hasattr(pyodide.ffi, "can_run_sync"):
-            return bool(pyodide.ffi.can_run_sync())  # pragma: no cover
-        else:
-            from pyodide_js._module import (
-                validSuspender,
-            )  # pragma: no cover
-
-            return bool(validSuspender.value)  # pragma: no cover
 
     def _is_in_browser_main_thread(self) -> bool:
         return hasattr(js, "window") and hasattr(js, "self") and js.self == js.window
@@ -316,7 +298,7 @@ class JavascriptFetchTransport(BaseTransport):
                 if name.lower() not in HEADERS_TO_IGNORE:
                     js_xhr.setRequestHeader(name, value)
 
-            js_xhr.send(pyodide.ffi.to_js(req_body))
+            js_xhr.send(to_js(req_body))
 
             headers = dict(
                 email.parser.Parser().parsestr(js_xhr.getAllResponseHeaders())
@@ -328,7 +310,7 @@ class JavascriptFetchTransport(BaseTransport):
                 body = js_xhr.response.encode("ISO-8859-15")
 
             return Response(status_code=js_xhr.status, headers=headers, content=body)
-        except pyodide.ffi.JsException as err:
+        except JsException as err:
             if err.name == "TimeoutError":
                 raise ConnectTimeout(message="Request timed out")
             else:
@@ -341,9 +323,9 @@ class JavascriptFetchTransport(BaseTransport):
 class AsyncEmscriptenStream(AsyncByteStream):
     def __init__(
         self,
-        response_stream_js: pyodide.ffi.JsProxy,
+        response_stream_js: JsProxy,
         timeout: float,
-        abort_controller_js: pyodide.ffi.JsProxy,
+        abort_controller_js: JsProxy,
     ) -> None:
         self._stream_js = response_stream_js
         self.timeout = timeout
@@ -424,14 +406,14 @@ class AsyncJavascriptFetchTransport(AsyncBaseTransport):
         }
         fetch_data = {
             "headers": headers,
-            "body": pyodide.ffi.to_js(req_body),
+            "body": to_js(req_body),
             "method": request.method,
             "signal": abort_controller_js.signal,
         }
 
         fetcher_promise_js = js.fetch(
             request.url,
-            pyodide.ffi.to_js(fetch_data, dict_converter=js.Object.fromEntries),
+            to_js(fetch_data, dict_converter=js.Object.fromEntries),
         )
         response_js = await _run_async_with_timeout(
             fetcher_promise_js,

@@ -19,6 +19,7 @@ import email.parser
 import typing
 from contextlib import contextmanager
 from types import TracebackType
+from typing import Any, TypeVar
 
 import js
 from pyodide.ffi import JsException, JsProxy, can_run_sync, run_sync, to_js
@@ -38,14 +39,14 @@ from .._models import Request, Response
 from .._types import AsyncByteStream, CertTypes, ProxyTypes, SyncByteStream
 from .base import AsyncBaseTransport, BaseTransport
 
-T = typing.TypeVar("T", bound="JavascriptFetchTransport")
-A = typing.TypeVar("A", bound="AsyncJavascriptFetchTransport")
+T = TypeVar("T", bound="JavascriptFetchTransport")
+A = TypeVar("A", bound="AsyncJavascriptFetchTransport")
 
-SOCKET_OPTION = typing.Union[
-    typing.Tuple[int, int, int],
-    typing.Tuple[int, int, typing.Union[bytes, bytearray]],
-    typing.Tuple[int, int, None, int],
-]
+SOCKET_OPTION = (
+    tuple[int, int, int]
+    | tuple[int, int, typing.Union[bytes, bytearray]]
+    | tuple[int, int, None, int]
+)
 
 __all__ = ["AsyncJavascriptFetchTransport", "JavascriptFetchTransport"]
 
@@ -176,6 +177,7 @@ def _compute_timeouts(extensions: dict[str, Any]) -> tuple[float, float]:
     conn_timeout = timeout_dict.get("connect", 0.0) or 0.0
     read_timeout = timeout_dict.get("read", 0.0) or 0.0
     return [conn_timeout, read_timeout]
+
 
 class JavascriptFetchTransport(BaseTransport):
     def __init__(

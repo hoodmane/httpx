@@ -146,6 +146,48 @@ async def _run_async_with_timeout(
         return await promise
 
 
+def _compute_timeouts(extensions: dict[str, Any]) -> tuple[float, float]:
+    timeout_dict = extensions.get("timeout", {}) or {}
+    conn_timeout = timeout_dict.get("connect", 0.0) or 0.0
+    read_timeout = timeout_dict.get("read", 0.0) or 0.0
+    return [conn_timeout, read_timeout]
+
+
+def _do_fetch(request: Request, request_body: bytes, abort_controller_js: Any):
+    headers = {k: v for k, v in request.headers.items() if k not in HEADERS_TO_IGNORE}
+    fetch_data = {
+        "headers": headers,
+        "body": to_js(request_body),
+        "method": request.method,
+        "signal": abort_controller_js.signal,
+    }
+
+    return js.fetch(
+        request.url,
+        to_js(fetch_data, dict_converter=js.Object.fromEntries),
+    )
+
+
+def _js_response_to_python(
+    Stream: "type[EmscriptenStream] | type[AsyncEmscriptenStream]",
+    response_js: Any,
+    read_timeout: float,
+    abort_controller_js: Any,
+) -> Response:
+    headers = dict(response_js.headers.entries())
+    # fix content-encoding headers because the javascript fetch handles that
+    headers["content-encoding"] = "identity"
+    status_code = response_js.status
+
+    # get a reader from the fetch response
+    body_stream_js = response_js.body.getReader()
+    return Response(
+        status_code=status_code,
+        headers=headers,
+        stream=Stream(body_stream_js, read_timeout, abort_controller_js),
+    )
+
+
 class EmscriptenStream(SyncByteStream):
     def __init__(
         self,
@@ -174,13 +216,6 @@ class EmscriptenStream(SyncByteStream):
 
     def close(self) -> None:
         self._stream_js = None
-
-
-def _compute_timeouts(extensions: dict[str, Any]) -> tuple[float, float]:
-    timeout_dict = extensions.get("timeout", {}) or {}
-    conn_timeout = timeout_dict.get("connect", 0.0) or 0.0
-    read_timeout = timeout_dict.get("read", 0.0) or 0.0
-    return [conn_timeout, read_timeout]
 
 
 class JavascriptFetchTransport(BaseTransport):
@@ -217,27 +252,12 @@ class JavascriptFetchTransport(BaseTransport):
     ) -> Response:
         assert isinstance(request.stream, SyncByteStream)
         if not can_run_sync():
-            return self._no_jspi_fallback(request)
-        req_body: bytes | None = b"".join(request.stream)
-        if req_body is not None and len(req_body) == 0:
-            req_body = None
+            return _no_jspi_fallback(request)
+        request_body: bytes | None = b"".join(request.stream) or None
+
         conn_timeout, read_timeout = _compute_timeouts(request.extensions)
         abort_controller_js = js.AbortController.new()
-        headers = {
-            k: v for k, v in request.headers.items() if k not in HEADERS_TO_IGNORE
-        }
-        fetch_data = {
-            "headers": headers,
-            "body": to_js(req_body),
-            "method": request.method,
-            "signal": abort_controller_js.signal,
-        }
-
-        fetcher_promise_js = js.fetch(
-            request.url,
-            to_js(fetch_data, dict_converter=js.Object.fromEntries),
-        )
-
+        fetcher_promise_js = _do_fetch(request, request_body, abort_controller_js)
         response_js = _run_sync_with_timeout(
             fetcher_promise_js,
             conn_timeout,
@@ -245,74 +265,9 @@ class JavascriptFetchTransport(BaseTransport):
             ConnectTimeout,
             ConnectError,
         )
-
-        headers = {}
-        header_iter = response_js.headers.entries()
-        while True:
-            iter_value_js = header_iter.next()
-            if getattr(iter_value_js, "done", False):
-                break
-            else:
-                headers[str(iter_value_js.value[0])] = str(iter_value_js.value[1])
-        # fix content-encoding headers because the javascript fetch handles that
-        headers["content-encoding"] = "identity"
-        status_code = response_js.status
-
-        # get a reader from the fetch response
-        body_stream_js = response_js.body.getReader()
-        return Response(
-            status_code=status_code,
-            headers=headers,
-            stream=EmscriptenStream(body_stream_js, read_timeout, abort_controller_js),
+        return _js_response_to_python(
+            EmscriptenStream, response_js, read_timeout, abort_controller_js
         )
-
-    def _is_in_browser_main_thread(self) -> bool:
-        return hasattr(js, "window") and hasattr(js, "self") and js.self == js.window
-
-    def _no_jspi_fallback(self, request: Request) -> Response:
-        assert isinstance(request.stream, SyncByteStream)
-        try:
-            js_xhr = js.XMLHttpRequest.new()
-
-            req_body: bytes | None = b"".join(request.stream)
-            if req_body is not None and len(req_body) == 0:
-                req_body = None
-            _, timeout = _compute_timeouts(request.extensions)
-
-            # XHMLHttpRequest only supports timeouts and proper
-            # binary file reading in web-workers
-            if not self._is_in_browser_main_thread():
-                js_xhr.responseType = "arraybuffer"
-                if timeout > 0.0:
-                    js_xhr.timeout = int(timeout * 1000)
-            else:
-                # this is a nasty hack to be able to read binary files on
-                # main browser thread using xmlhttprequest
-                js_xhr.overrideMimeType("text/plain; charset=ISO-8859-15")
-
-            js_xhr.open(request.method, request.url, False)
-
-            for name, value in request.headers.items():
-                if name.lower() not in HEADERS_TO_IGNORE:
-                    js_xhr.setRequestHeader(name, value)
-
-            js_xhr.send(to_js(req_body))
-
-            headers = dict(
-                email.parser.Parser().parsestr(js_xhr.getAllResponseHeaders())
-            )
-
-            if not self._is_in_browser_main_thread():
-                body = js_xhr.response.to_py().tobytes()
-            else:
-                body = js_xhr.response.encode("ISO-8859-15")
-
-            return Response(status_code=js_xhr.status, headers=headers, content=body)
-        except JsException as err:
-            if err.name == "TimeoutError":
-                raise ConnectTimeout(message="Request timed out")
-            else:
-                raise ConnectError(message=err.message)
 
     def close(self) -> None:
         pass  # pragma: nocover
@@ -381,30 +336,15 @@ class AsyncJavascriptFetchTransport(AsyncBaseTransport):
         request: Request,
     ) -> Response:
         assert isinstance(request.stream, AsyncByteStream)
-        body_data: bytes = b""
+        request_body: bytes = b""
         async for x in request.stream:
-            body_data += x
-        if len(body_data) == 0:
-            req_body = None
-        else:
-            req_body = body_data
+            request_body += x
+        if not request_body:
+            request_body = None
+
         conn_timeout, read_timeout = _compute_timeouts(request.extensions)
-
         abort_controller_js = js.AbortController.new()
-        headers = {
-            k: v for k, v in request.headers.items() if k not in HEADERS_TO_IGNORE
-        }
-        fetch_data = {
-            "headers": headers,
-            "body": to_js(req_body),
-            "method": request.method,
-            "signal": abort_controller_js.signal,
-        }
-
-        fetcher_promise_js = js.fetch(
-            request.url,
-            to_js(fetch_data, dict_converter=js.Object.fromEntries),
-        )
+        fetcher_promise_js = _do_fetch(request, request_body, abort_controller_js)
         response_js = await _run_async_with_timeout(
             fetcher_promise_js,
             conn_timeout,
@@ -412,26 +352,58 @@ class AsyncJavascriptFetchTransport(AsyncBaseTransport):
             ConnectTimeout,
             ConnectError,
         )
-
-        headers = {}
-        header_iter = response_js.headers.entries()
-        while True:
-            iter_value_js = header_iter.next()
-            if getattr(iter_value_js, "done", False):
-                break
-            else:
-                headers[str(iter_value_js.value[0])] = str(iter_value_js.value[1])
-        status_code = response_js.status
-
-        # get a reader from the fetch response
-        body_stream_js = response_js.body.getReader()
-        return Response(
-            status_code=status_code,
-            headers=headers,
-            stream=AsyncEmscriptenStream(
-                body_stream_js, read_timeout, abort_controller_js
-            ),
+        return _js_response_to_python(
+            AsyncEmscriptenStream, response_js, read_timeout, abort_controller_js
         )
 
     async def aclose(self) -> None:
         pass  # pragma: nocover
+
+
+# Use XHR to do a sync request without jspi
+def _is_in_browser_main_thread() -> bool:
+    return hasattr(js, "window") and hasattr(js, "self") and js.self == js.window
+
+
+def _no_jspi_fallback(request: Request) -> Response:
+    assert isinstance(request.stream, SyncByteStream)
+    try:
+        js_xhr = js.XMLHttpRequest.new()
+
+        req_body: bytes | None = b"".join(request.stream)
+        if req_body is not None and len(req_body) == 0:
+            req_body = None
+        _, timeout = _compute_timeouts(request.extensions)
+
+        # XHMLHttpRequest only supports timeouts and proper
+        # binary file reading in web-workers
+        if not _is_in_browser_main_thread():
+            js_xhr.responseType = "arraybuffer"
+            if timeout > 0.0:
+                js_xhr.timeout = int(timeout * 1000)
+        else:
+            # this is a nasty hack to be able to read binary files on
+            # main browser thread using xmlhttprequest
+            js_xhr.overrideMimeType("text/plain; charset=ISO-8859-15")
+
+        js_xhr.open(request.method, request.url, False)
+
+        for name, value in request.headers.items():
+            if name.lower() not in HEADERS_TO_IGNORE:
+                js_xhr.setRequestHeader(name, value)
+
+        js_xhr.send(to_js(req_body))
+
+        headers = dict(email.parser.Parser().parsestr(js_xhr.getAllResponseHeaders()))
+
+        if not _is_in_browser_main_thread():
+            body = js_xhr.response.to_py().tobytes()
+        else:
+            body = js_xhr.response.encode("ISO-8859-15")
+
+        return Response(status_code=js_xhr.status, headers=headers, content=body)
+    except JsException as err:
+        if err.name == "TimeoutError":
+            raise ConnectTimeout(message="Request timed out")
+        else:
+            raise ConnectError(message=err.message)

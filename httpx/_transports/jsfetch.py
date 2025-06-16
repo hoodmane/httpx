@@ -67,6 +67,9 @@ def _timeout(
     timer_id = None
     if timeout > 0:
         print("Setting timeout", timeout)
+        abort = abort_controller_js.abort
+        print("Will call abort...")
+        abort()
         timer_id = js.setTimeout(abort_controller_js.abort, int(timeout * 1000))
     try:
         print("Yielding", timeout)

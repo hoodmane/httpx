@@ -65,7 +65,11 @@ def _timeout(
 ):
     timer_id = None
     if timeout > 0:
-        timer_id = js.setTimeout(abort_controller_js.abort, int(timeout * 1000))
+        # It looks odd that we have to call bind() here since the JsProxy will
+        # automatically remember the receiver. But when we pass it back to
+        # JavaScript, we unwrap it and forget the receiver.
+        abort = abort_controller_js.abort.bind(abort_controller_js)
+        timer_id = js.setTimeout(abort, int(timeout * 1000))
     try:
         yield
     except pyodide.ffi.JsException as err:
@@ -211,15 +215,9 @@ class JavascriptFetchTransport(BaseTransport):
         req_body: bytes | None = b"".join(request.stream)
         if req_body is not None and len(req_body) == 0:
             req_body = None
-        conn_timeout = 0.0
-        read_timeout = 0.0
-        if "timeout" in request.extensions:
-            timeout_dict = request.extensions["timeout"]
-            if timeout_dict is not None:
-                if "connect" in timeout_dict:
-                    conn_timeout = timeout_dict["connect"] or 0.0
-                if "read" in timeout_dict:
-                    read_timeout = timeout_dict["read"] or 0.0
+        timeout_dict = request.extensions.get("timeout", {}) or {}
+        conn_timeout = timeout_dict.get("connect", 0.0) or 0.0
+        read_timeout = timeout_dict.get("read", 0.0) or 0.0
         abort_controller_js = js.AbortController.new()
         headers = {
             k: v for k, v in request.headers.items() if k not in HEADERS_TO_IGNORE

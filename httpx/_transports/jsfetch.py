@@ -63,10 +63,13 @@ def _timeout(
     TimeoutExceptionType: type[RequestError],
     ErrorExceptionType: type[RequestError],
 ):
+    print("timeout!!")
     timer_id = None
     if timeout > 0:
+        print("Setting timeout", timeout)
         timer_id = js.setTimeout(abort_controller_js.abort, int(timeout * 1000))
     try:
+        print("Yielding", timeout)
         yield
     except pyodide.ffi.JsException as err:
         if err.name == "AbortError":
@@ -76,6 +79,7 @@ def _timeout(
             raise ErrorExceptionType(message=err.message)
     finally:
         if timer_id is not None:
+            print("Clearing timeout")
             js.clearTimeout(timer_id)
 
 
@@ -105,6 +109,7 @@ def _run_sync_with_timeout(
     """
     from pyodide.ffi import run_sync
 
+    print("_run_sync_with_timeout!!")
     with _timeout(
         timeout, abort_controller_js, TimeoutExceptionType, ErrorExceptionType
     ):

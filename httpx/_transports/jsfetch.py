@@ -172,7 +172,7 @@ def _js_response_to_python(
 ) -> Response:
     headers = dict(response_js.headers.entries())
     # fix content-encoding headers because the javascript fetch handles that
-    headers["content-encoding"] = "identity"
+    # headers["content-encoding"] = "identity"
     status_code = response_js.status
 
     # get a reader from the fetch response

@@ -57,6 +57,22 @@ See also https://github.com/koenvo/pyodide-http/issues/22
 HEADERS_TO_IGNORE = ("user-agent",)
 
 
+def _is_browser() -> bool:
+    try:
+        user_agent = js.navigator.userAgent
+    except AttributeError:
+        return False
+    return not (
+        user_agent == "Cloudflare-Workers" or user_agent.startswith("Node")
+    )
+
+
+def _get_request_headers(request: Request) -> dict[str, str]:
+    if _is_browser():
+        return {k: v for k, v in request.headers.items() if k not in HEADERS_TO_IGNORE}
+    return dict(request.headers.items())
+
+
 @contextmanager
 def _timeout(
     timeout: float,
@@ -154,9 +170,8 @@ def _compute_timeouts(extensions: dict[str, Any]) -> tuple[float, float]:
 
 
 def _do_fetch(request: Request, request_body: bytes, abort_controller_js: Any):
-    headers = {k: v for k, v in request.headers.items() if k not in HEADERS_TO_IGNORE}
     fetch_data = {
-        "headers": headers,
+        "headers": _get_request_headers(request),
         "body": to_js(request_body),
         "method": request.method,
         "signal": abort_controller_js.signal,
@@ -388,9 +403,8 @@ def _no_jspi_fallback(request: Request) -> Response:
 
         js_xhr.open(request.method, request.url, False)
 
-        for name, value in request.headers.items():
-            if name.lower() not in HEADERS_TO_IGNORE:
-                js_xhr.setRequestHeader(name, value)
+        for name, value in _get_request_headers(request).items():
+            js_xhr.setRequestHeader(name, value)
 
         js_xhr.send(to_js(req_body))
 

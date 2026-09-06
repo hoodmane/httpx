@@ -7,6 +7,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ## [Unreleased]
 
 * Support for Emscripten (#3330)
+* Handle Emscripten fetch responses with a null body.
 
 ## 0.28.1 (6th December, 2024)
 

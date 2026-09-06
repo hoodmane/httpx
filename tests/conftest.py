@@ -75,6 +75,10 @@ async def app(scope: Scope, receive: Receive, send: Send) -> None:
         await hello_world_json(scope, receive, send)
     elif scope["path"].startswith("/wheel_download"):  # pragma: nocover for emscripten
         await wheel_download(scope, receive, send)
+    elif scope["path"].startswith(
+        "/emscripten_no_content"
+    ):  # pragma: nocover for emscripten
+        await no_content_emscripten(scope, receive, send)
     elif scope["path"].startswith("/emscripten"):  # pragma: nocover for emscripten
         await hello_world_emscripten(scope, receive, send)
     else:
@@ -113,6 +117,19 @@ async def hello_world_emscripten(
         }
     )
     await send({"type": "http.response.body", "body": b"Hello, world!"})
+
+
+async def no_content_emscripten(
+    scope: Scope, receive: Receive, send: Send
+) -> None:  # pragma: nocover for emscripten
+    await send(
+        {
+            "type": "http.response.start",
+            "status": 204,
+            "headers": [[b"access-control-allow-origin", b"*"]],
+        }
+    )
+    await send({"type": "http.response.body", "body": b""})
 
 
 # For testing on emscripten, it is useful to be able to

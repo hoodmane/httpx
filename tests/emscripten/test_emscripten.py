@@ -64,6 +64,42 @@ def test_async_get(
     )
 
 
+def test_async_no_content(
+    server_url: httpx.URL, wheel_url: httpx.URL, pyodide_coverage: Any
+) -> None:
+    url = server_url.copy_with(path="/emscripten_no_content")
+    pyodide_coverage.run_with_httpx(
+        f"""
+        import httpx
+        async with httpx.AsyncClient() as client:
+            response = await client.get('{url}')
+            assert response.status_code == 204
+            assert response.content == b""
+    """,
+        wheel_url,
+    )
+
+
+def test_sync_no_content(
+    server_url: httpx.URL,
+    wheel_url: httpx.URL,
+    pyodide_coverage: Any,
+    has_jspi: bool,
+) -> None:
+    if not has_jspi:
+        pytest.skip()
+    url = server_url.copy_with(path="/emscripten_no_content")
+    pyodide_coverage.run_with_httpx(
+        f"""
+        import httpx
+        response = httpx.get('{url}')
+        assert response.status_code == 204
+        assert response.content == b""
+    """,
+        wheel_url,
+    )
+
+
 def test_async_get_timeout(
     server_url: httpx.URL,
     wheel_url: httpx.URL,

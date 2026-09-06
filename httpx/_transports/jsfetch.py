@@ -28,6 +28,7 @@ if typing.TYPE_CHECKING:
     import ssl  # pragma: nocover
 
 from .._config import DEFAULT_LIMITS, Limits
+from .._content import ByteStream
 from .._exceptions import (
     ConnectError,
     ConnectTimeout,
@@ -179,7 +180,12 @@ def _js_response_to_python(
     headers["content-encoding"] = "identity"
     status_code = response_js.status
 
-    # get a reader from the fetch response
+    # Fetch responses without a body, such as 204 responses, expose a null body.
+    if not hasattr(response_js.body, "getReader"):
+        return Response(
+            status_code=status_code, headers=headers, stream=ByteStream(b"")
+        )
+
     body_stream_js = response_js.body.getReader()
     return Response(
         status_code=status_code,

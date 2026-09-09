@@ -64,6 +64,38 @@ def test_async_get(
     )
 
 
+def test_user_agent_header_filtering(
+    wheel_url: httpx.URL, pyodide_coverage: Any
+) -> None:
+    pyodide_coverage.run_with_httpx(
+        """
+        import httpx
+        from httpx._transports import jsfetch
+
+        request = httpx.Request(
+            "GET",
+            "https://example.com",
+            headers={"User-Agent": "custom-user-agent", "Custom-Header": "value"},
+        )
+
+        assert jsfetch._is_browser()
+        original_is_browser = jsfetch._is_browser
+        try:
+            jsfetch._is_browser = lambda: True
+            assert jsfetch._get_request_headers(request) == {"custom-header": "value"}
+
+            jsfetch._is_browser = lambda: False
+            assert jsfetch._get_request_headers(request) == {
+                "user-agent": "custom-user-agent",
+                "custom-header": "value",
+            }
+        finally:
+            jsfetch._is_browser = original_is_browser
+        """,
+        wheel_url,
+    )
+
+
 def test_async_get_timeout(
     server_url: httpx.URL,
     wheel_url: httpx.URL,
